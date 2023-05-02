@@ -1,0 +1,243 @@
+SELECT *
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+
+
+
+---------------------------------------------------------------------------
+
+
+
+-- STANDARDIZE SALE DATE --
+
+SELECT SaleDate, CAST(SaleDate AS date) AS date
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+
+UPDATE `portfolio-projects-1.housing_data.nashville_housing`
+SET SaleDate = CAST(SaleDate AS date)
+
+
+
+--------------------------------------------------------------------------
+
+
+
+-- POPULATE PROPERTY ADDRESS DATA --
+
+
+SELECT *
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+WHERE PropertyAddress IS NULL
+
+-- finding a reference point for null data
+
+SELECT *
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+--WHERE PropertyAddress IS NULL
+ORDER BY ParcelID
+
+-- we see that if 2 parcel IDs are the same, so are the address they're attached to
+-- now we know ParcelID is the reference point to join tables
+
+-- now we create a dupliate table (b) to compare
+-- ParcelID is the reference point but UniqueID_ is the distinguishing point
+
+SELECT a.ParcelID, a.PropertyAddress, b.ParcelID, b.PropertyAddress
+FROM `portfolio-projects-1.housing_data.nashville_housing` AS a
+JOIN `portfolio-projects-1.housing_data.nashville_housing` AS b
+  ON a.ParcelID = b.ParcelID
+  AND a.UniqueID_ != b.UniqueID_
+WHERE a.PropertyAddress IS NULL
+
+
+-- now create a new column to replace the missing addresses in a.PropertyAddress
+
+SELECT a.ParcelID, a.PropertyAddress, b.ParcelID, b.PropertyAddress, COALESCE(a.PropertyAddress,b.PropertyAddress) AS populated_address
+FROM `portfolio-projects-1.housing_data.nashville_housing` AS a
+JOIN `portfolio-projects-1.housing_data.nashville_housing` AS b
+  ON a.ParcelID = b.ParcelID
+  AND a.UniqueID_ != b.UniqueID_
+WHERE a.PropertyAddress IS NULL
+
+
+-- now we update the table to fill any null values for address
+
+UPDATE a
+SET PropertyAddress = COALESCE(a.PropertyAddress,b.PropertyAddress)
+FROM `portfolio-projects-1.housing_data.nashville_housing` AS a
+JOIN `portfolio-projects-1.housing_data.nashville_housing` AS b
+  ON a.ParcelID = b.ParcelID
+  AND a.UniqueID_ != b.UniqueID_
+WHERE a.PropertyAddress IS NULL
+
+
+
+----------------------------------------------------------------------------------
+
+
+
+-- BREAKING OUT ADDRESS INTO INDIVIDUAL COLUMNS (ADRESS, CITY, STATE)--
+
+-- starting with PropertyAddress
+-- split address into street and city
+
+SELECT PropertyAddress, SPLIT(PropertyAddress, ',') [SAFE_ORDINAL(1)] AS street, SPLIT(PropertyAddress, ',') [SAFE_ORDINAL (2)] AS city
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+
+-- update table with new columns
+-- add columns first
+
+ALTER TABLE `portfolio-projects-1.housing_data.nashville_housing`
+ADD COLUMN PropertySplitStreet string
+
+ALTER TABLE `portfolio-projects-1.housing_data.nashville_housing`
+ADD COLUMN PropertySplitCity string
+
+-- fill columns
+
+UPDATE `portfolio-projects-1.housing_data.nashville_housing`
+SET PropertySplitStreet = SPLIT(PropertyAddress, ',') [SAFE_ORDINAL(1)]
+
+UPDATE `portfolio-projects-1.housing_data.nashville_housing`
+SET PropertySplitCity = SPLIT(PropertyAddress, ',') [SAFE_ORDINAL(2)]
+
+
+-- moving on to OwnerAddress
+-- split into street, city, and state
+
+SELECT OwnerAddress, SPLIT(OwnerAddress, ',') [SAFE_ORDINAL(1)] AS street, SPLIT(OwnerAddress, ',') [SAFE_ORDINAL (2)] AS city, SPLIT(OwnerAddress, ',') [SAFE_ORDINAL (3)] AS state
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+WHERE OwnerAddress IS NOT NULL
+
+-- update table
+-- add columns
+
+ALTER TABLE `portfolio-projects-1.housing_data.nashville_housing`
+ADD COLUMN OwnerSplitStreet string;
+
+ALTER TABLE `portfolio-projects-1.housing_data.nashville_housing`
+ADD COLUMN OwnerSplitCity string;
+
+ALTER TABLE `portfolio-projects-1.housing_data.nashville_housing`
+ADD COLUMN OwnerSplitState string
+
+--fill columns
+
+UPDATE `portfolio-projects-1.housing_data.nashville_housing`
+SET OwnerSplitStreet = SPLIT(OwnerAddress, ',') [SAFE_ORDINAL(1)];
+
+UPDATE `portfolio-projects-1.housing_data.nashville_housing`
+SET OwnerSplitCity = SPLIT(OwnerAddress, ',') [SAFE_ORDINAL(2)];
+
+UPDATE `portfolio-projects-1.housing_data.nashville_housing`
+SET OwnerSplitState = SPLIT(OwnerAddress, ',') [SAFE_ORDINAL(3)]
+
+
+
+----------------------------------------------------------------------------------
+
+
+
+-- CHANGE 'Y' AND 'N' TO 'YES' AND 'NO' IN "SOLD AS VACANT" COLUMN
+
+
+SELECT DISTINCT(SoldAsVacant), COUNT(SoldAsVacant)
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+GROUP BY SoldAsVacant
+
+SELECT SoldAsVacant,
+  CASE WHEN SoldAsVacant = 'Y' then 'Yes'
+    WHEN SoldAsVacant = 'N' then 'No'
+    ELSE SoldAsVacant
+    END
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+
+UPDATE `portfolio-projects-1.housing_data.nashville_housing`
+SET SoldAsVacant = CASE WHEN SoldAsVacant = 'Y' then 'Yes'
+    WHEN SoldAsVacant = 'N' then 'No'
+    ELSE SoldAsVacant
+    END
+
+
+
+---------------------------------------------------------------------------------
+
+
+
+-- REMOVE DUPLICATES --
+
+--create new column to identify duplicate rows
+
+SELECT *,
+  ROW_NUMBER() OVER (
+    PARTITION BY 
+      ParcelID,
+      PropertyAddress,
+      SalePrice,
+      SaleDate,
+      LegalReference
+    ORDER BY UniqueID_
+  ) AS row_num
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+
+--create a CTE to specifically pull duplicate rows
+
+WITH RowNumCTE AS(
+SELECT *,
+  ROW_NUMBER() OVER (
+    PARTITION BY 
+      ParcelID,
+      PropertyAddress,
+      SalePrice,
+      SaleDate,
+      LegalReference
+    ORDER BY UniqueID_
+  ) AS row_num
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+)
+SELECT *
+FROM RowNumCTE
+WHERE row_num > 1
+
+--update table by deleting duplicate rows
+
+WITH RowNumCTE AS(
+SELECT *,
+  ROW_NUMBER() OVER (
+    PARTITION BY 
+      ParcelID,
+      PropertyAddress,
+      SalePrice,
+      SaleDate,
+      LegalReference
+    ORDER BY UniqueID_
+  ) AS row_num
+FROM `portfolio-projects-1.housing_data.nashville_housing`
+)
+DELETE
+FROM RowNumCTE
+WHERE row_num > 1
+
+
+
+------------------------------------------------------------------------------
+
+-- DELETE UNUSED COLUMNS --
+
+ALTER TABLE `portfolio-projects-1.housing_data.nashville_housing`
+DROP COLUMN IF EXISTS
+  OwnerAddress;
+
+ALTER TABLE `portfolio-projects-1.housing_data.nashville_housing`
+DROP COLUMN IF EXISTS
+  TaxDistrict;
+
+ALTER TABLE `portfolio-projects-1.housing_data.nashville_housing`
+DROP COLUMN IF EXISTS
+  PropertyAddress;
+
+ALTER TABLE `portfolio-projects-1.housing_data.nashville_housing`
+DROP COLUMN IF EXISTS
+  SaleDate
+
+SELECT *
+FROM `portfolio-projects-1.housing_data.nashville_housing`
